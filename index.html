@@ -117,8 +117,8 @@ let S;try{S=JSON.parse(localStorage.getItem(K))}catch(e){}
 if(!S||!S.groups)S=dflt();
 const save=()=>{S._t=Date.now();try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}push()};
 const SY={off:'',wait:'☁️ กำลังเชื่อมต่อ',ok:'☁️ ซิงค์แล้ว',err:'☁️ ยังซิงค์ไม่ได้'};
-const CFG={OWNER:'',REPO:'checklist-data',PATH:'checklist-data.json',BRANCH:'',TOKEN:''}; // OWNER ว่างได้ถ้าเปิดจาก USER.github.io (ดึงชื่อให้เอง) / REPO = repo private ที่เก็บข้อมูล
-if(!CFG.OWNER&&/\.github\.io$/.test(location.hostname))CFG.OWNER=location.hostname.split('.')[0];
+const CFG={OWNER:'',REPO:'',PATH:'checklist-data.json',BRANCH:'data',TOKEN:''}; // เปิดจาก USER.github.io/ชื่อrepo ระบบดึง OWNER/REPO ให้เอง / ข้อมูลเก็บใน branch "data" (สร้างให้อัตโนมัติ)
+if(/\.github\.io$/.test(location.hostname)){const h=location.hostname.split('.')[0],sg=location.pathname.split('/')[1]||'';if(!CFG.OWNER)CFG.OWNER=h;if(!CFG.REPO)CFG.REPO=sg&&!/\./.test(sg)?sg:h+'.github.io'}
 const lsg=k=>{try{return localStorage.getItem(k)||''}catch(e){return ''}},lss=(k,v)=>{try{v?localStorage.setItem(k,v):localStorage.removeItem(k)}catch(e){}};
 const tok=()=>CFG.TOKEN||lsg(K+'-tok');
 const on=()=>!!(CFG.OWNER&&CFG.REPO&&tok());
@@ -128,6 +128,19 @@ let dirty=false,busy=false,sha=null,errMsg='';
 function api(method,body){
   const u=`https://api.github.com/repos/${CFG.OWNER}/${CFG.REPO}/contents/${CFG.PATH}`+(method==='GET'?`?t=${Date.now()}${CFG.BRANCH?'&ref='+CFG.BRANCH:''}`:'');
   return fetch(u,{method,cache:'no-store',headers:{Authorization:'Bearer '+tok(),Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+}
+let brOk=false;
+async function ensureBranch(){
+  if(brOk||!CFG.BRANCH)return;
+  const b=`https://api.github.com/repos/${CFG.OWNER}/${CFG.REPO}`,H={Authorization:'Bearer '+tok(),Accept:'application/vnd.github+json','Content-Type':'application/json'};
+  const r=await fetch(`${b}/git/ref/heads/${CFG.BRANCH}`,{headers:H,cache:'no-store'});
+  if(r.status===404){
+    const rr=await fetch(b,{headers:H,cache:'no-store'});if(!rr.ok)throw new Error(rr.status);
+    const d=await fetch(`${b}/git/ref/heads/${(await rr.json()).default_branch}`,{headers:H,cache:'no-store'});if(!d.ok)throw new Error(d.status);
+    const c=await fetch(`${b}/git/refs`,{method:'POST',headers:H,body:JSON.stringify({ref:'refs/heads/'+CFG.BRANCH,sha:(await d.json()).object.sha})});
+    if(!c.ok&&c.status!==422)throw new Error(c.status);
+  }else if(!r.ok)throw new Error(r.status);
+  brOk=true;
 }
 async function ghGet(){const r=await api('GET');if(r.status===404){sha=null;return null}if(!r.ok)throw new Error(r.status);const j=await r.json();sha=j.sha;return JSON.parse(dec(j.content))}
 async function ghPut(o){
@@ -143,14 +156,14 @@ function push(){if(!on())return;dirty=true;clearTimeout(pushT);pushT=setTimeout(
 async function flush(){
   if(!on()||!dirty||busy)return;
   busy=true;const snap=JSON.parse(JSON.stringify(S));
-  try{await ghPut(snap);if(S._t===snap._t)dirty=false;setSync('ok')}
+  try{await ensureBranch();await ghPut(snap);if(S._t===snap._t)dirty=false;setSync('ok')}
   catch(e){if(e.message==='conflict')await pull();else fail(e)}
   busy=false;if(dirty&&sync==='ok')push();
 }
 async function pull(){
   if(!on())return;
   try{
-    const r=await ghGet();
+    await ensureBranch();const r=await ghGet();
     if(r&&r.groups&&(r._t||0)>(S._t||0)){
       S=r;lss(K,JSON.stringify(S));
       if(S.th)document.documentElement.dataset.theme=S.th;
@@ -162,7 +175,7 @@ async function pull(){
     setSync('ok');
   }catch(e){fail(e)}
 }
-const ghStatus=()=>!CFG.OWNER?'ยังไม่รู้ชื่อ GitHub (ใส่ OWNER ใน CFG)':!tok()?'ยังไม่ได้ใส่ token':sync==='ok'?'เชื่อมต่อแล้ว':sync==='err'?'มีปัญหา: '+errMsg:'กำลังเชื่อมต่อ…';
+const ghStatus=()=>!CFG.OWNER?'ยังไม่รู้ชื่อ repo (เปิดจาก github.io หรือใส่ OWNER/REPO ใน CFG)':!tok()?'ยังไม่ได้ใส่ token':sync==='ok'?'เชื่อมต่อแล้ว':sync==='err'?'มีปัญหา: '+errMsg:'กำลังเชื่อมต่อ…';
 function openTok(){
   D={t:'t'};
   $('#sheet').innerHTML='<div class="bk" data-a="x"></div><div class="pn"><div class="grab"></div><h3>เชื่อมต่อ GitHub</h3><p style="font-size:14px;color:var(--mu);margin:0 0 12px">วาง Personal Access Token (fine-grained) ที่มีสิทธิ์ <b>Contents: Read and write</b> เฉพาะ repo เก็บข้อมูล เก็บไว้ในเครื่องนี้เท่านั้น ถ้าล้างแคชต้องวางใหม่ แต่ข้อมูลไม่หาย</p><div class="f"><input id="ft" type="password" autocomplete="off" placeholder="'+(lsg(K+'-tok')?'มี token อยู่แล้ว (วางใหม่เพื่อเปลี่ยน)':'github_pat_...')+'"></div><div class="acts"><button class="bt dg" data-a="rmt">ลบ</button><button class="bt" data-a="x">ยกเลิก</button><button class="bt pr" data-a="svt">เชื่อมต่อ</button></div></div>';
